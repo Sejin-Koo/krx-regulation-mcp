@@ -16,6 +16,11 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 }
 
+# KRX가 일부 페이지(주로 "규정 원문 링크" 역할만 하던 페이지)를 rule.krx.co.kr(법무포털)로
+# 이관하면서, 원래 URL은 실제 내용 대신 이 안내문구만 반환하는 경우가 있다(2026.7 확인).
+# 이런 페이지는 정보가 없으므로 자동으로 건너뛴다.
+DEAD_MARKERS = ["법규사이트로 이동", "KRX 법규사이트 바로가기"]
+
 def extract_body(html: str) -> str:
     """article class="body-content" ~ 다음 </article> 사이만 추출, 태그 제거"""
     m = re.search(r'<article class="body-content">(.*?)</article>', html, re.S)
@@ -92,7 +97,15 @@ def crawl(url_file: str, out_f, source: str):
                 continue
             r.encoding = r.apparent_encoding or "utf-8"
             html = r.text
+            if any(marker in html for marker in DEAD_MARKERS):
+                fail += 1
+                print(f"[{i}/{total}] SKIP(폐지된 페이지, rule.krx.co.kr로 이관됨) {url}", file=sys.stderr)
+                continue
             body = extract_body(html)
+            if len(body) < 10:
+                fail += 1
+                print(f"[{i}/{total}] SKIP(본문 없음/구조 변경 의심) {url}", file=sys.stderr)
+                continue
             title = extract_title(html)
             h1 = extract_breadcrumb(html)
             meta = classify(url)

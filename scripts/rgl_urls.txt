@@ -1,4 +1,3 @@
-http://regulation.krx.co.kr/contents/RGL/01/01010000/RGL01010000.jsp
 http://regulation.krx.co.kr/contents/RGL/02/02010101/RGL02010101.jsp
 http://regulation.krx.co.kr/contents/RGL/02/02010102/RGL02010102.jsp
 http://regulation.krx.co.kr/contents/RGL/02/02010103/RGL02010103.jsp
@@ -24,7 +23,6 @@ http://regulation.krx.co.kr/contents/RGL/02/02030204/RGL02030204.jsp
 http://regulation.krx.co.kr/contents/RGL/02/02030400/RGL02030400.jsp
 http://regulation.krx.co.kr/contents/RGL/02/02030500/RGL02030500.jsp
 http://regulation.krx.co.kr/contents/RGL/02/02030600/RGL02030600.jsp
-http://regulation.krx.co.kr/contents/RGL/02/02030800/RGL02030800.jsp
 http://regulation.krx.co.kr/contents/RGL/03/03010100/RGL03010100.jsp
 http://regulation.krx.co.kr/contents/RGL/03/03010201/RGL03010201.jsp
 http://regulation.krx.co.kr/contents/RGL/03/03010202/RGL03010202.jsp
@@ -154,10 +152,7 @@ http://regulation.krx.co.kr/contents/RGL/06/06040402/RGL06040402.jsp
 http://regulation.krx.co.kr/contents/RGL/06/06040500/RGL06040500.jsp
 http://regulation.krx.co.kr/contents/RGL/06/06050000/RGL06050000.jsp
 http://regulation.krx.co.kr/contents/RGL/06/06060100/RGL06060100.jsp
-http://regulation.krx.co.kr/contents/RGL/06/06060201/RGL06060201.jsp
-http://regulation.krx.co.kr/contents/RGL/06/06060202/RGL06060202.jsp
 http://regulation.krx.co.kr/contents/RGL/06/06070101/RGL06070101.jsp
-http://regulation.krx.co.kr/contents/RGL/06/06070103/RGL06070103.jsp
 http://regulation.krx.co.kr/contents/RGL/07/07010000/RGL07010000.jsp
 http://regulation.krx.co.kr/contents/RGL/07/07020000/RGL07020000.jsp
 http://regulation.krx.co.kr/contents/RGL/07/07030000/RGL07030000.jsp
