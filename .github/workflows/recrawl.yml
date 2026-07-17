@@ -1,0 +1,68 @@
+name: KRX 규정 재크롤링 및 자동 배포
+
+on:
+  schedule:
+    # 매주 월요일 05:00 UTC = 한국시간 14:00
+    - cron: "0 5 * * 1"
+  workflow_dispatch: {}   # 수동 실행 버튼도 사용 가능
+
+jobs:
+  recrawl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 의존 패키지 설치
+        run: pip install requests
+
+      - name: 사이트맵 재수집 (URL 목록 갱신)
+        run: |
+          cd scripts
+          python3 - <<'EOF'
+          import re, requests
+          headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+          html = requests.get("http://regulation.krx.co.kr/contents/COM/Sitemap.jsp", headers=headers, timeout=20).text
+          rgl = sorted(set(re.findall(r'href="(/contents/RGL/[^"]+\.jsp)"', html)))
+          lst = sorted(set(re.findall(r'href="(https?://listing\.krx\.co\.kr/contents/LST/[^"]+\.jsp)"', html)))
+          with open("rgl_urls.txt", "w") as f:
+              f.write("\n".join("http://regulation.krx.co.kr" + u for u in rgl) + "\n")
+          with open("lst_urls.txt", "w") as f:
+              f.write("\n".join(lst) + "\n")
+          print(f"RGL: {len(rgl)}  LST: {len(lst)}")
+          EOF
+
+      - name: 전체 페이지 재크롤링
+        run: |
+          cd scripts
+          python3 crawl_krx.py
+
+      - name: 재분류 및 최종 데이터 생성
+        run: |
+          cd scripts
+          python3 reclassify.py
+          cp krx_pages_final.jsonl ../data/krx_pages_final.jsonl
+          python3 -c "
+          import json
+          recs = [json.loads(l) for l in open('krx_pages_final.jsonl', encoding='utf-8')]
+          json.dump(recs, open('../data/krx_pages.json', 'w', encoding='utf-8'), ensure_ascii=False)
+          print('data/krx_pages.json 갱신:', len(recs), '건')
+          "
+
+      - name: 변경사항 확인 및 자동 커밋 (변경 있을 때만)
+        run: |
+          git config user.name "krx-regulation-bot"
+          git config user.email "actions@github.com"
+          if git diff --quiet -- data/krx_pages.json; then
+            echo "변경 없음 - 재배포 생략"
+          else
+            git add data/krx_pages.json data/krx_pages_final.jsonl scripts/rgl_urls.txt scripts/lst_urls.txt
+            git commit -m "chore: KRX 규정 데이터 자동 재크롤링 ($(date +%Y-%m-%d))"
+            git push
+            echo "변경 감지 - 커밋·푸시 완료 (Vercel이 자동 재배포함)"
+          fi

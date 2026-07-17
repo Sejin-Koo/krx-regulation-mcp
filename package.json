@@ -1,0 +1,18 @@
+{
+  "name": "krx-regulation-mcp",
+  "version": "1.0.0",
+  "description": "KRX(한국거래소) 상장규정·공시규정·매매거래제도 해설 데이터를 제공하는 MCP 서버",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev:test": "node scripts/local_test.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}
