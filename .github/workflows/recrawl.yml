@@ -19,7 +19,7 @@ jobs:
           python-version: "3.11"
 
       - name: 의존 패키지 설치
-        run: pip install requests
+        run: pip install requests pypdf
 
       - name: 사이트맵 재수집 (URL 목록 갱신)
         run: |
@@ -42,14 +42,21 @@ jobs:
           cd scripts
           python3 crawl_krx.py
 
+      - name: KIND 해설서 PDF 크롤링 (투자주의환기종목 등 상장관리업무 세부요건)
+        run: |
+          cd scripts
+          python3 crawl_kind_pdf.py
+
       - name: 재분류 및 최종 데이터 생성
         run: |
           cd scripts
           python3 reclassify.py
           cp krx_pages_final.jsonl ../data/krx_pages_final.jsonl
+          cp kind_pdf_pages.jsonl ../data/kind_pdf_pages.jsonl
           python3 -c "
           import json
           recs = [json.loads(l) for l in open('krx_pages_final.jsonl', encoding='utf-8')]
+          recs += [json.loads(l) for l in open('kind_pdf_pages.jsonl', encoding='utf-8')]
           json.dump(recs, open('../data/krx_pages.json', 'w', encoding='utf-8'), ensure_ascii=False)
           print('data/krx_pages.json 갱신:', len(recs), '건')
           "
@@ -61,7 +68,7 @@ jobs:
           if git diff --quiet -- data/krx_pages.json; then
             echo "변경 없음 - 재배포 생략"
           else
-            git add data/krx_pages.json data/krx_pages_final.jsonl scripts/rgl_urls.txt scripts/lst_urls.txt
+            git add data/krx_pages.json data/krx_pages_final.jsonl data/kind_pdf_pages.jsonl scripts/rgl_urls.txt scripts/lst_urls.txt
             git commit -m "chore: KRX 규정 데이터 자동 재크롤링 ($(date +%Y-%m-%d))"
             git push
             echo "변경 감지 - 커밋·푸시 완료 (Vercel이 자동 재배포함)"
