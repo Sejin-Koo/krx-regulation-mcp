@@ -1,14 +1,29 @@
 name: KRX 규정 재크롤링 및 자동 배포
 
+# v2 (2026-07-21): KASB MCP 크롤러에서 발견된 것과 동일한 문제 예방을 위해 수정
+#  1) cron을 매주 월요일 14:00 KST -> 매주 월요일 02:00 KST로 변경(출근 전 최신화 완료)
+#  2) python3에 -u(출력 버퍼링 해제) 추가 - 로그가 실시간으로 보이도록
+#  3) crawl_krx.py / crawl_kind_pdf.py가 페이지 하나 쓸 때마다 즉시 flush()하도록 수정
+#     (별도 커밋 - scripts/crawl_krx.py, scripts/crawl_kind_pdf.py)
+#  4) reclassify.py가 입력 파일이 없거나 비어있어도(중간에 취소된 경우) 에러 없이
+#     "있는 만큼"만 처리하도록 수정(별도 커밋 - scripts/reclassify.py)
+#  5) "재분류 및 최종 데이터 생성"과 "커밋" 단계에 if: always() 추가 - 타임아웃/취소로
+#     크롤링이 중간에 끊겨도 그때까지 수집된 데이터는 재분류·커밋되도록 함
+#  6) 사이트맵 재수집 단계는 continue-on-error: true 추가 - 이 단계가 실패해도
+#     이미 저장소에 있는 URL 목록(scripts/rgl_urls.txt, lst_urls.txt)으로 본 크롤링은 진행
+
 on:
   schedule:
-    # 매주 월요일 05:00 UTC = 한국시간 14:00
-    - cron: "0 5 * * 1"
-  workflow_dispatch: {}   # 수동 실행 버튼도 사용 가능
+    - cron: "0 17 * * 0" # 매주 일요일 17:00 UTC = 월요일 02:00 KST
+  workflow_dispatch: {} # 수동 실행 버튼도 사용 가능
+
+permissions:
+  contents: write
 
 jobs:
   recrawl:
     runs-on: ubuntu-latest
+    timeout-minutes: 60 # RGL/LST 254페이지 + KIND PDF 소수 문서 - 정상적으로는 수 분 내 완료됨
     steps:
       - name: 저장소 체크아웃
         uses: actions/checkout@v4
@@ -22,9 +37,10 @@ jobs:
         run: pip install requests pypdf
 
       - name: 사이트맵 재수집 (URL 목록 갱신)
+        continue-on-error: true # 실패해도 저장소에 이미 있는 URL 목록으로 본 크롤링은 계속 진행
         run: |
           cd scripts
-          python3 - <<'EOF'
+          python3 -u - <<'EOF'
           import re, requests
           headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
           html = requests.get("http://regulation.krx.co.kr/contents/COM/Sitemap.jsp", headers=headers, timeout=20).text
@@ -40,36 +56,51 @@ jobs:
       - name: 전체 페이지 재크롤링
         run: |
           cd scripts
-          python3 crawl_krx.py
+          python3 -u crawl_krx.py
 
       - name: KIND 해설서 PDF 크롤링 (투자주의환기종목 등 상장관리업무 세부요건)
         run: |
           cd scripts
-          python3 crawl_kind_pdf.py
+          python3 -u crawl_kind_pdf.py
 
       - name: 재분류 및 최종 데이터 생성
+        if: always() # 위 크롤링 단계가 타임아웃/취소로 중간에 끊겨도, 그때까지 쓰인 부분 데이터로 진행
         run: |
           cd scripts
-          python3 reclassify.py
+          python3 -u reclassify.py
+          mkdir -p ../data
           cp krx_pages_final.jsonl ../data/krx_pages_final.jsonl
-          cp kind_pdf_pages.jsonl ../data/kind_pdf_pages.jsonl
-          python3 -c "
+          if [ -f kind_pdf_pages.jsonl ]; then
+            cp kind_pdf_pages.jsonl ../data/kind_pdf_pages.jsonl
+          else
+            echo "경고: kind_pdf_pages.jsonl 없음(KIND PDF 단계 시작 전 중단) - 빈 파일로 대체"
+            : > ../data/kind_pdf_pages.jsonl
+          fi
+          python3 -u -c "
           import json
-          recs = [json.loads(l) for l in open('krx_pages_final.jsonl', encoding='utf-8')]
-          recs += [json.loads(l) for l in open('kind_pdf_pages.jsonl', encoding='utf-8')]
+          recs = []
+          try:
+              recs += [json.loads(l) for l in open('krx_pages_final.jsonl', encoding='utf-8') if l.strip()]
+          except FileNotFoundError:
+              pass
+          try:
+              recs += [json.loads(l) for l in open('kind_pdf_pages.jsonl', encoding='utf-8') if l.strip()]
+          except FileNotFoundError:
+              pass
           json.dump(recs, open('../data/krx_pages.json', 'w', encoding='utf-8'), ensure_ascii=False)
           print('data/krx_pages.json 갱신:', len(recs), '건')
           "
 
       - name: 변경사항 확인 및 자동 커밋 (변경 있을 때만)
+        if: always() # 타임아웃/취소로 크롤링이 중간에 끊겨도, 그때까지 수집·재분류된 데이터는 커밋한다
         run: |
           git config user.name "krx-regulation-bot"
           git config user.email "actions@github.com"
-          if git diff --quiet -- data/krx_pages.json; then
-            echo "변경 없음 - 재배포 생략"
+          git add data/krx_pages.json data/krx_pages_final.jsonl data/kind_pdf_pages.jsonl scripts/rgl_urls.txt scripts/lst_urls.txt
+          if git diff --cached --quiet; then
+            echo "변경 사항 없음 - 커밋 생략"
           else
-            git add data/krx_pages.json data/krx_pages_final.jsonl data/kind_pdf_pages.jsonl scripts/rgl_urls.txt scripts/lst_urls.txt
-            git commit -m "chore: KRX 규정 데이터 자동 재크롤링 ($(date +%Y-%m-%d))"
+            git commit -m "chore: KRX 규정 데이터 자동 재크롤링 ($(date -u +%Y-%m-%d))"
             git push
             echo "변경 감지 - 커밋·푸시 완료 (Vercel이 자동 재배포함)"
           fi

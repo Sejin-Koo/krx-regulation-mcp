@@ -5,6 +5,10 @@ KRX regulation.krx.co.kr / listing.krx.co.kr 전체 페이지 크롤러
 - 사이트맵 기반 정적 JSP 페이지 194(RGL) + 60(LST) = 254개
 - 본문(article.body-content) 텍스트만 추출, 메뉴/푸터 제거
 - JSON Lines 형태로 저장 (한 줄에 한 페이지)
+
+v2 (2026-07-21): 페이지 하나 쓸 때마다 즉시 flush()하도록 수정 + 진행 로그
+print(flush=True) 추가. (KASB MCP 크롤러에서 발견한 것과 동일한 문제 예방 —
+타임아웃/취소 시 버퍼에 남아있던 마지막 몇 건이 디스크에 안 쓰이고 날아가는 것 방지)
 """
 import re
 import json
@@ -21,13 +25,15 @@ HEADERS = {
 # 이런 페이지는 정보가 없으므로 자동으로 건너뛴다.
 DEAD_MARKERS = ["법규사이트로 이동", "KRX 법규사이트 바로가기"]
 
+def log(msg):
+    print(msg, file=sys.stderr, flush=True)
+
 def extract_body(html: str) -> str:
     """article class="body-content" ~ 다음 </article> 사이만 추출, 태그 제거"""
     m = re.search(r'<article class="body-content">(.*?)</article>', html, re.S)
     if not m:
         return ""
     frag = m.group(1)
-    # 이미지/스크립트 태그 등 제거
     frag = re.sub(r'<script.*?</script>', ' ', frag, flags=re.S)
     frag = re.sub(r'<style.*?</style>', ' ', frag, flags=re.S)
     frag = re.sub(r'<[^>]+>', ' ', frag)
@@ -93,18 +99,18 @@ def crawl(url_file: str, out_f, source: str):
             r = requests.get(url, headers=HEADERS, timeout=15)
             if r.status_code != 200:
                 fail += 1
-                print(f"[{i}/{total}] FAIL {r.status_code} {url}", file=sys.stderr)
+                log(f"[{i}/{total}] FAIL {r.status_code} {url}")
                 continue
             r.encoding = r.apparent_encoding or "utf-8"
             html = r.text
             if any(marker in html for marker in DEAD_MARKERS):
                 fail += 1
-                print(f"[{i}/{total}] SKIP(폐지된 페이지, rule.krx.co.kr로 이관됨) {url}", file=sys.stderr)
+                log(f"[{i}/{total}] SKIP(폐지된 페이지, rule.krx.co.kr로 이관됨) {url}")
                 continue
             body = extract_body(html)
             if len(body) < 10:
                 fail += 1
-                print(f"[{i}/{total}] SKIP(본문 없음/구조 변경 의심) {url}", file=sys.stderr)
+                log(f"[{i}/{total}] SKIP(본문 없음/구조 변경 의심) {url}")
                 continue
             title = extract_title(html)
             h1 = extract_breadcrumb(html)
@@ -120,12 +126,13 @@ def crawl(url_file: str, out_f, source: str):
                 "body": body,
             }
             out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            out_f.flush()  # 취소/타임아웃 시에도 지금까지 쓴 줄은 디스크에 남도록
             ok += 1
             if i % 20 == 0 or i == total:
-                print(f"[{source}] {i}/{total} 완료 (성공 {ok}, 실패 {fail})", file=sys.stderr)
+                log(f"[{source}] {i}/{total} 완료 (성공 {ok}, 실패 {fail})")
         except Exception as e:
             fail += 1
-            print(f"[{i}/{total}] ERROR {url} : {e}", file=sys.stderr)
+            log(f"[{i}/{total}] ERROR {url} : {e}")
         time.sleep(0.15)  # 서버 부하 방지
     return ok, fail
 
@@ -133,4 +140,4 @@ if __name__ == "__main__":
     with open("krx_pages.jsonl", "w", encoding="utf-8") as out_f:
         ok1, fail1 = crawl("rgl_urls.txt", out_f, "regulation.krx.co.kr")
         ok2, fail2 = crawl("lst_urls.txt", out_f, "listing.krx.co.kr")
-    print(f"\n=== 완료 === RGL 성공/실패: {ok1}/{fail1}  LST 성공/실패: {ok2}/{fail2}", file=sys.stderr)
+    log(f"\n=== 완료 === RGL 성공/실패: {ok1}/{fail1}  LST 성공/실패: {ok2}/{fail2}")
