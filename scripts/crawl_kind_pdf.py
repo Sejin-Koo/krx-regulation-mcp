@@ -6,6 +6,9 @@ KIND(kind.krx.co.kr) 게시 공시·상장관리 해설서 PDF 크롤러
   상장관리업무 세부 지정요건은 이 해설서 PDF에만 상세히 기재되어 있어 별도 소스로 추가.
 - 페이지 단위로 텍스트를 추출하여 JSON Lines로 저장 (기존 크롤러와 동일 스키마 유지).
 - 소스 목록: scripts/kind_pdf_sources.txt (탭 구분: url \t market \t 문서제목)
+
+v2 (2026-07-21): 페이지 하나 쓸 때마다 즉시 flush() + 진행 로그 flush=True 추가.
+(KASB MCP 크롤러 수정과 동일한 이유 — 타임아웃/취소 시 버퍼에 남은 데이터 유실 방지)
 """
 import re
 import sys
@@ -20,7 +23,11 @@ HEADERS = {
 }
 
 CHAPTER_RE = re.compile(r"제\s*([1-9])\s*장\s*([^\n]{2,20})")
-SECTION_RE = re.compile(r"([\u2160-\u2169]+)\s+([^\n0-9][^\n]{1,40})")
+SECTION_RE = re.compile(r"([Ⅰ-Ⅹ]+)\s+([^\n0-9][^\n]{1,40})")
+
+
+def log(msg):
+    print(msg, file=sys.stderr, flush=True)
 
 
 def extract_pdf_pages(pdf_bytes: bytes):
@@ -36,24 +43,25 @@ def crawl(source_file: str, out_f):
     for line in lines:
         parts = line.split("\t")
         if len(parts) < 3:
-            print(f"SKIP (형식 오류): {line}", file=sys.stderr)
+            log(f"SKIP (형식 오류): {line}")
             continue
         url, market, doc_title = parts[0], parts[1], parts[2]
         try:
             r = requests.get(url, headers=HEADERS, timeout=60)
             if r.status_code != 200:
                 fail += 1
-                print(f"FAIL {r.status_code} {url}", file=sys.stderr)
+                log(f"FAIL {r.status_code} {url}")
                 continue
             pages = extract_pdf_pages(r.content)
         except Exception as e:
             fail += 1
-            print(f"ERROR {url} : {e}", file=sys.stderr)
+            log(f"ERROR {url} : {e}")
             continue
 
         current_chapter = ""
         current_section = ""
         total = len(pages)
+        log(f"[{doc_title}] PDF 다운로드 완료, {total}페이지 처리 시작")
         for idx, body in enumerate(pages, 1):
             body = re.sub(r"\s+", " ", body).strip()
             ch = CHAPTER_RE.findall(body)
@@ -82,9 +90,10 @@ def crawl(source_file: str, out_f):
                 "body": body,
             }
             out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            out_f.flush()  # 취소/타임아웃 시에도 지금까지 쓴 페이지는 디스크에 남도록
             ok += 1
             if idx % 50 == 0 or idx == total:
-                print(f"[{doc_title}] {idx}/{total} 페이지 처리 완료", file=sys.stderr)
+                log(f"[{doc_title}] {idx}/{total} 페이지 처리 완료")
         time.sleep(0.2)
     return ok, fail
 
@@ -92,4 +101,4 @@ def crawl(source_file: str, out_f):
 if __name__ == "__main__":
     with open("kind_pdf_pages.jsonl", "w", encoding="utf-8") as out_f:
         ok, fail = crawl("kind_pdf_sources.txt", out_f)
-    print(f"\n=== KIND PDF 완료 === 성공 {ok} 페이지 / 실패 {fail}건", file=sys.stderr)
+    log(f"\n=== KIND PDF 완료 === 성공 {ok} 페이지 / 실패 {fail}건")
