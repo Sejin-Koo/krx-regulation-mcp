@@ -58,6 +58,19 @@ function gateCheck(req, res) {
   return true;
 }
 
+// 호출자의 게이트키. 별표 본문을 PDF Vector DB MCP 서버에서 가져올 때 같은 키로 호출한다.
+function extractKey(req) {
+  let k = (req.query && req.query.k) || null;
+  if (!k) {
+    try {
+      k = new URL(req.url, "http://localhost").searchParams.get("k");
+    } catch (e) {
+      k = null;
+    }
+  }
+  return k;
+}
+
 export default async function handler(req, res) {
   if (!gateCheck(req, res)) return;
 
@@ -66,7 +79,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const server = buildServer();
+  const server = buildServer({ gateKey: extractKey(req) });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
   res.on("close", () => {
