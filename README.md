@@ -1,145 +1,168 @@
 # KRX Regulation MCP Server
 
-KRX(한국거래소) 상장규정·공시규정·매매거래제도 등 규정 **해설 자료 655건**
-(regulation.krx.co.kr 189건 + listing.krx.co.kr 60건 + KIND 게시 「코스닥시장 공시·상장관리 해설」
-PDF 406페이지)을 검색·조회하는 MCP 서버입니다.
+KRX(한국거래소) 상장규정·공시규정·업무규정·상장적격성 실질심사지침의 **조문 원문**과,
+KRX가 공식 게시한 **제도 해설·상장요건표**를 검색·조회하는 MCP 서버입니다.
 
-규정 해설 페이지(249건, 폐지된 5건 제외)에는 없는 상장관리업무 세부 지정요건(예: 투자주의환기종목 정기지정
-통계모형 변수·가중치, 관리종목/실질심사 세부 기준표 등)은 KIND 해설서 PDF에서 페이지 단위로
-추출하여 보완합니다. PDF 소스 목록은 `scripts/kind_pdf_sources.txt`에서 관리하며,
-`scripts/crawl_kind_pdf.py`가 매주 재크롤링 워크플로우에 포함되어 자동 갱신됩니다.
+데이터는 성격이 다른 두 층으로 나뉩니다.
 
-기존에 쓰고 계신 DART MCP / DCF Peer Group MCP와 동일한 방식(Vercel 배포,
-`/api/mcp`에 JSON-RPC 2.0 POST)으로 만들었습니다.
+| 층 | 출처 | 방식 | 최신성 |
+|---|---|---|---|
+| 조문 원문 | `rule.krx.co.kr` (KRX 법무포털) | 호출할 때마다 실시간 조회 | 항상 최신 개정본 |
+| 해설·요건표 | `regulation.krx.co.kr`, `listing.krx.co.kr`, KIND 해설서 PDF | 주 1회 크롤링한 정적 데이터(`data/krx_pages.json`) | 최대 1주 시차 |
 
-## ⚠️ 커버리지 한계 (중요)
+## 데이터 획득 방식 — 공식 API가 아니라 스크래핑
 
-이 서버는 **KRX가 공식 게시한 "제도 해설 + 상장요건표 + 조문번호 인용"**을 다룹니다.
-법정 상장규정·공시규정의 **완전한 조문 원문 그 자체**는 아직 포함되어 있지 않습니다
-(원문은 `rule.krx.co.kr`에 있으나 CSRF/WAF로 보호되어 현재 접근 불가).
+KRX는 규정 조문·해설에 대한 공식 Open API를 제공하지 않습니다. 이 서버는 두 층 모두
+사이트가 브라우저에 내려주는 내용을 직접 가져옵니다. 발급받을 인증키가 없는 대신,
+**원본 사이트가 개편되면 사전 공지 없이 동작이 깨질 수 있습니다.**
 
-`get_krx_rule_fulltext` 도구는 이런 상황을 감안해 **스텁(stub)**으로 미리 만들어
-두었습니다 — 이름과 파라미터는 지금 확정되어 있으므로, 나중에 rule.krx.co.kr
-접근이 가능해지면 `lib/server.js`의 해당 도구 내부 구현만 교체하면 됩니다
-(MCP 클라이언트 쪽 재연결·재등록 불필요).
+### 조문 원문 (`lib/rule_krx_client.js`)
+
+1. `https://rule.krx.co.kr/`에 접속해 세션 쿠키와 CSRF 토큰(`_csrf`)을 받습니다.
+2. 그 토큰으로 `/out/regulation/regulationViewPop.do`에 `bookid`를 POST합니다.
+3. 돌아온 HTML에서 스크립트·태그를 걷어내고, 본칙 `제1조(…)`부터 본문 텍스트를 반환합니다.
+
+사이트의 검색(`outsearch.do`)과 트리 브라우징(`getTreeNode.do`)은 세션·JS 상태 의존이 커서
+순수 HTTP로 재현되지 않습니다(2026.7 확인). 그래서 **규정별 `bookid`를 사람이 브라우저에서
+확인해 `RULE_LOOKUP` 매핑표에 수동 등록하는 구조**이며, 매핑표에 없는 규정은 조문 원문을
+조회할 수 없습니다(2026-09-28 기준 23개 규정 등록).
+
+특정 조문 추출 시에는 개정 부칙 블록 안의 "제N조(다른 규정의 개정)" 같은 인용을 본문으로
+오인하지 않도록 걸러내고, 삭제된 조문은 "(삭제)" 상태를 그대로 보여줍니다.
+
+### 해설·요건표 (`scripts/`)
+
+| 소스 | 수집 스크립트 | 건수(2026-09-28 기준) |
+|---|---|---:|
+| regulation.krx.co.kr 제도해설 | `crawl_krx.py` (URL 목록: `rgl_urls.txt`) | 188 |
+| listing.krx.co.kr 상장요건표 | `crawl_krx.py` (URL 목록: `lst_urls.txt`) | 60 |
+| KIND 「코스닥시장 공시·상장관리 해설」 PDF | `crawl_kind_pdf.py` (소스 목록: `kind_pdf_sources.txt`) | 406 (페이지 단위) |
+| 합계 | `reclassify.py`로 시장·분류 태깅 후 병합 | 654 |
+
+해설 페이지에 없는 상장관리업무 세부 지정요건(투자주의환기종목 정기지정 통계모형 변수·가중치,
+관리종목·실질심사 세부 기준표 등)은 KIND 해설서 PDF에서 페이지 단위로 추출해 보완합니다.
+건수는 주간 재크롤링 결과에 따라 달라지며, 실제 값은 `scripts/local_test.js` 실행 시 첫 줄에
+출력됩니다.
 
 ## 제공 도구 (3개)
 
-1. **search_krx_regulation** — keyword/market/category로 검색 (market: 유가증권시장·코스닥시장·코넥스시장·공통)
-2. **get_krx_regulation_page** — url 또는 page_name으로 특정 페이지 전체 본문 조회
-3. **get_krx_rule_fulltext** — [준비중] 완전한 법정 조문 원문 (현재는 안내 메시지 + 관련 해설 힌트 반환)
+| 도구 | 기능 | 데이터 층 |
+|---|---|---|
+| `search_krx_regulation` | keyword·market·category로 해설·요건표 검색. 띄어쓰기 차이를 무시하고 매칭 | 해설(정적) |
+| `get_krx_regulation_page` | `url` 또는 `page_name`으로 해설 페이지 전체 본문 조회 | 해설(정적) |
+| `get_krx_rule_fulltext` | `rule_name`(+선택 `article_no`)으로 조문 원문 실시간 조회. 응답 앞에 "제N차 일부개정 YYYY.MM.DD" 개정이력 포함 | 조문(실시간) |
 
-## 로컬 테스트 (배포 전 확인용)
+`market` 값: `유가증권시장` / `코스닥시장` / `코넥스시장` / `공통`
+
+## 알려진 제약
+
+- **별표·별지·서식은 조회되지 않습니다.** `get_krx_rule_fulltext`는 `제N조` 본문만 가져오는
+  구조라, 지정·해제 시기표, 벌점 배점표, 제재금 산정식 같은 첨부 표는 포함하지 않습니다.
+  `article_no`에 "별표9" 등을 넣으면 조회를 시도하지 않고 즉시 대체 경로(PDF Vector DB MCP의
+  `krx_listing_disclosure` 컬렉션)를 안내합니다.
+- **`RULE_LOOKUP`에 없는 규정은 조문 원문 미지원.** 이 경우 관련 해설 페이지를 대신 안내합니다.
+- **규정 제·개정예고(미시행 초안)는 조회 불가.** 별도 게시판 시스템이라 이 서버의 범위 밖입니다.
+- **`law.krx.co.kr`은 공식 폐지되어 사용하지 않습니다.** 조문 원문의 유효한 출처는
+  `rule.krx.co.kr`뿐입니다.
+- KRX **시세** 데이터(`data-dbg.krx.co.kr`, AUTH_KEY 필요)는 별개의 공식 API이며 이 서버와 무관합니다.
+
+## 새 규정 추가 (수작업)
+
+1. 브라우저로 `rule.krx.co.kr` 접속 → KRX규정 메뉴 → 추가할 규정 클릭
+2. F12 개발자도구 Network 탭에서 `regulationViewPop.do` 요청의 `bookid` 파라미터 확인
+3. `lib/rule_krx_client.js`의 `RULE_LOOKUP`에 `"규정명": { bookid: "…", market: "…" }` 추가
+4. `main`에 push → Vercel 자동 재배포
+
+사이트의 검색·트리 API가 자동화되지 않으므로 이 단계는 사람이 직접 해야 합니다.
+
+## 접근 게이트
+
+엔드포인트 주소만으로 누구나 호출하는 것을 막기 위해, 호출자는 발급받은 게이트키를
+쿼리스트링으로 전달합니다.
+
+```
+https://krx-regulation-mcp.vercel.app/api/mcp?k=<발급키>
+```
+
+| 환경변수 | 의미 |
+|---|---|
+| `MCP_GATE_KEYS` | 허용 키 목록(쉼표 구분). **비어 있으면 게이트 비활성**(모두 통과) |
+| `MCP_GATE_MODE` | `enforce`면 키가 없거나 목록에 없을 때 401 차단. 그 밖(기본 `observe`)이면 통과시키되 로그만 남김 |
+
+로그에는 키 전문 대신 발급 대상 식별자만 남습니다. 키 값은 이 저장소에 두지 않으며,
+발급·차단 절차는 별도 운영 문서에서 관리합니다.
+
+## 직접 호출 (curl)
+
+StreamableHTTP 규격상 `Accept: application/json, text/event-stream` 헤더가 필수입니다
+(없으면 `Not Acceptable`). 응답은 `event: message` / `data: {...}` 형태의 SSE이며,
+`data:` 뒤의 JSON이 실제 결과입니다.
+
+```bash
+# 도구 목록
+curl -X POST "https://krx-regulation-mcp.vercel.app/api/mcp?k=<발급키>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+# 조문 원문 실시간 조회
+curl -X POST "https://krx-regulation-mcp.vercel.app/api/mcp?k=<발급키>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_krx_rule_fulltext","arguments":{"rule_name":"코스닥시장 상장규정","article_no":"제28조"}}}'
+```
+
+claude.ai에서는 설정 > 커넥터에 게이트키가 포함된 위 주소를 커스텀 MCP 서버로 등록해 사용합니다.
+
+## 데이터 갱신 자동화 (GitHub Actions)
+
+`.github/workflows/recrawl.yml`이 **매주 월요일 02:00 KST**(일요일 17:00 UTC)에 자동 실행됩니다.
+Actions 탭 "KRX 규정 재크롤링 및 자동 배포" → "Run workflow"로 수동 실행도 가능합니다.
+
+1. 사이트맵 재수집으로 URL 목록 갱신 — 실패해도 저장소의 기존 URL 목록으로 계속 진행
+2. 해설 페이지 전체 재크롤링 (`crawl_krx.py`)
+3. KIND 해설서 PDF 크롤링 (`crawl_kind_pdf.py`)
+4. 재분류 후 `data/krx_pages.json` 생성 — 앞 단계가 중간에 끊겨도 수집된 만큼으로 진행
+5. 변경이 있을 때만 자동 커밋·푸시 → Vercel이 push를 감지해 자동 재배포
+
+조문 원문 층은 매 호출 실시간 조회이므로 이 워크플로의 대상이 아닙니다.
+
+## 배포
+
+GitHub `main` 브랜치에 push하면 Vercel이 자동 재배포합니다. 로컬 PC 상태와 무관하게
+GitHub·Vercel 클라우드에서 동작합니다. `vercel.json`은 서버리스 함수에 `data/**`를
+포함시키고 최대 실행시간을 30초로 설정합니다.
+
+## 로컬 테스트
 
 ```bash
 npm install
 npm run dev:test
 ```
 
-인메모리 트랜스포트로 실제 MCP 클라이언트-서버 통신을 시뮬레이션해서
-3개 도구가 정상 동작하는지 확인합니다. (이미 검증 완료된 상태로 드립니다.)
-
-## Vercel 배포
-
-```bash
-npm install -g vercel   # 최초 1회
-cd krx-regulation-mcp
-vercel login
-vercel --prod
-```
-
-배포되면 `https://<프로젝트명>.vercel.app/api/mcp` 형태의 URL이 나옵니다.
-기존 DART MCP·DCF MCP와 마찬가지로 인증 없이 바로 호출 가능합니다.
-
-## 배포 후 curl로 직접 확인 (claude.ai tool_search가 못 잡을 경우 대비)
-
-⚠️ **StreamableHTTP 프로토콜 특성상 `Accept: application/json, text/event-stream` 헤더가 반드시 필요합니다.** 이게 없으면 `Not Acceptable` 에러가 납니다.
-
-```bash
-# 도구 목록 확인
-curl -X POST https://krx-regulation-mcp.vercel.app/api/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-
-# 검색 실행 예시
-curl -X POST https://krx-regulation-mcp.vercel.app/api/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_krx_regulation","arguments":{"keyword":"우회상장"}}}'
-```
-
-응답은 `event: message\ndata: {...}` 형태의 SSE(Server-Sent Events) 스트림으로 옵니다 — `data:` 뒤의 JSON이 실제 결과입니다.
-
-## claude.ai에 연결하기
-
-claude.ai 설정 > 커넥터(Connectors)에서 배포된 URL(`https://<프로젝트명>.vercel.app/api/mcp`)을
-Custom MCP 서버로 추가하시면 됩니다. (DCF Peer Group MCP처럼 claude.ai의 tool_search가
-바로 못 잡으면, 기존에 하시던 대로 bash_tool의 curl JSON-RPC 직접 호출 방식으로도
-동일하게 쓸 수 있습니다.)
-
-## 데이터 갱신 (유지보수)
-
-`data/krx_pages.json`은 2026년 7월 17일 기준 크롤링 스냅샷입니다.
-KRX가 페이지를 개정하면(예: "(2024.1.1. 개정규정 기준)" 같은 버전 표기가 바뀌면)
-재크롤링이 필요합니다.
-
-### 자동화: GitHub Actions로 매주 재크롤링 + 자동 재배포
-
-`.github/workflows/recrawl.yml`이 매주 월요일(한국시간 14:00) 자동으로:
-1. 사이트맵 재수집 → 전체 페이지 재크롤링 → 재분류
-2. 이전 데이터와 다르면 자동 git commit + push
-3. Vercel이 GitHub push를 감지해서 **자동 재배포**
-
-이 방식은 로컬 PC(집/회사 노트북)가 켜져 있는지와 무관하게 GitHub 클라우드에서
-동작합니다. 최초 설정 방법은 아래 "GitHub 저장소 연결 및 자동배포 설정" 참고.
-
-수동으로 즉시 재크롤링하고 싶으면 GitHub 저장소의 Actions 탭에서
-"KRX 규정 재크롤링 및 자동 배포" 워크플로우를 열고 "Run workflow" 버튼을 누르면 됩니다.
-
-## GitHub 저장소 연결 및 자동배포 설정 (최초 1회)
-
-현재 이 프로젝트는 Vercel CLI로 직접 배포되어 있고 GitHub에는 연결되어 있지 않습니다.
-아래 순서로 GitHub 연동으로 전환하면, 이후엔 노트북 종류(집/회사)에 상관없이
-자동 재배포가 동작합니다.
-
-### 1. GitHub 저장소 생성 및 푸시 (지금 쓰고 있는 노트북에서)
-
-```bash
-cd krx-regulation-mcp
-git init
-git add .
-git commit -m "initial commit"
-```
-
-GitHub에서 새 저장소(예: `koo3/krx-regulation-mcp`)를 만든 뒤:
-
-```bash
-git remote add origin https://github.com/<본인계정>/krx-regulation-mcp.git
-git branch -M main
-git push -u origin main
-```
-
-### 2. Vercel 프로젝트를 GitHub 연동으로 전환
-
-Vercel 대시보드 → 해당 프로젝트(`krx-regulation-mcp`) → **Settings > Git** →
-"Connect Git Repository"에서 방금 만든 GitHub 저장소를 연결합니다.
-이후로는 `main` 브랜치에 push될 때마다 Vercel이 자동으로 재배포합니다
-(더 이상 `vercel --prod`를 수동으로 실행할 필요 없음).
-
-### 3. 확인
-
-GitHub 저장소의 **Actions 탭**에서 "KRX 규정 재크롤링 및 자동 배포" 워크플로우가
-보이면 정상 설정된 것입니다. 우측의 "Run workflow"로 수동 테스트 실행도 가능합니다.
+인메모리 트랜스포트로 클라이언트-서버 통신을 시뮬레이션해 데이터 건수, `tools/list`,
+`search_krx_regulation`, `get_krx_rule_fulltext`(실제 rule.krx.co.kr 호출) 동작을 확인합니다.
 
 ## 프로젝트 구조
 
 ```
 krx-regulation-mcp/
-├── api/mcp.js          # Vercel 서버리스 함수 (MCP HTTP 엔드포인트)
-├── lib/server.js        # MCP 서버 본체 (도구 3개 정의)
-├── data/krx_pages.json  # 크롤링된 655건 데이터 (규정해설 249 + KIND PDF 406페이지)
-├── scripts/local_test.js # 로컬 검증 스크립트
+├── api/mcp.js                   # Vercel 서버리스 엔드포인트 (접근 게이트 포함)
+├── lib/
+│   ├── server.js                # MCP 서버 본체 (도구 3개)
+│   └── rule_krx_client.js       # rule.krx.co.kr 실시간 조문 조회 + RULE_LOOKUP 매핑표
+├── data/
+│   ├── krx_pages.json           # 서버가 읽는 병합본 (해설 + KIND PDF)
+│   ├── krx_pages_final.jsonl    # 해설 페이지 재분류 결과
+│   └── kind_pdf_pages.jsonl     # KIND 해설서 PDF 페이지 추출 결과
+├── scripts/
+│   ├── crawl_krx.py             # 해설 페이지 크롤러
+│   ├── crawl_kind_pdf.py        # KIND PDF 크롤러
+│   ├── reclassify.py            # 시장·분류 태깅
+│   ├── check_dead_urls.py       # 해설 URL 생존 점검 (법무포털 이관·폐지 판별)
+│   ├── rgl_urls.txt / lst_urls.txt / kind_pdf_sources.txt   # 수집 대상 목록
+│   └── local_test.js            # 로컬 검증 스크립트
+├── .github/workflows/recrawl.yml
 ├── vercel.json
 └── package.json
 ```
